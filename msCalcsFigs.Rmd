@@ -1,0 +1,1753 @@
+---
+title: "Global Feeds MS Figs"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+
+library(tidyverse)
+library(kableExtra)
+library(maps)
+library(mapdata)
+library(ggmap)
+library(paletteer)
+library(patchwork)
+
+```
+
+# {.tabset}
+
+Using FAO data,I calculate global production of livestock and feed demands. [FAOSTAT](http://www.fao.org/faostat/en/) has meat production amounts, and the GLEAM dataset (from email from `GLEAM team, livestockfeeds/GLEAM_Data_Public_Release/GLEAM_GRL-Table1.csv`) contains a breakdown of production by region and production scale. I will use these relative scales applied to the FAO meat data to estimate how much meat is produced industrially. [Mottet et al. 2017](https://www.sciencedirect.com/science/article/abs/pii/S2211912416300013) also has data with FCRs for the different production scales if we want to bring these in. Data for smaller scales will be harder in aquaculture, and actually I don't think those scales would be relevant to SCP replacements. The first tab below uses all production of cattle, pig, chicken, small ruminants, and fed aquaculture, the second is limited to the industrial production of livestock, which for land-based is ~70% of the total global production. 
+
+#### Scale and geography disconnect in GLEAM
+
+The GLEAM dataset has some holes which are hard to work with, particularly scale data are only for feed type, so I am using feed proportions applied to FAO production data to estimate industrial production. There is no information on where the different scales are produced. From the maps below we can also guess which countries produce cattle, pigs and chicken at industrial scales. 
+
+## Global livestock
+
+
+```{r prodDat}
+
+### livestock production data
+livProd<-read_csv("data/faoData/FAOSTAT_data_4-13-2021.csv") 
+
+pcIngr<-read_csv("data/proteinContentLivestockInputs.csv")
+
+livProd2<-livProd%>%
+  mutate(product=str_replace(Item,"Meat, ",""))%>%
+  filter(product %in% c("cattle","pig","chicken","sheep","goat"))%>%
+  mutate(product=case_when(product %in% c("sheep","goat") ~ "smallRuminants",
+                           TRUE ~ product))%>%
+  group_by(Year,product)%>%
+  summarise(gloProd=sum(Value,na.rm=TRUE))
+
+glmFull<-read_csv("data/faoData/GLEAM_Data_public_release_tab1.csv",skip = 1, locale = locale(encoding = "latin1"))
+protInMeat<-data.frame(product=c("cattle","chicken","pig","goat","sheep"),
+                       meatProt=c(0.175,0.186,0.166,0.175,0.175)) #fry corregendum, table 1 mean of ranges, cattle used as proxy for small rum.
+
+edible<-data.frame(product=c("aquaculture","cattle","pig","chicken","smallRuminants"),
+                   ediblePortion=c(0.86,0.43,0.72,0.74,0.79))
+
+gf<-glmFull%>%
+  filter(!Region=="Global",
+         Commodity=="Meat")%>%
+  select(Region,product=`Animal species`,system=`Production system`,protProd=`kg protein`)%>%
+  mutate(protProd=as.numeric(str_replace_all(protProd,",","")))%>%
+  filter(!system=="Aggregated",
+         !product == "Buffaloes")%>%
+  group_by(Region,product)%>%
+  mutate(aggProd=sum(protProd))%>%
+  ungroup()%>%
+  mutate(propProd=protProd/aggProd)
+
+
+### Divide production into production systems
+gfGlo<-glmFull%>%
+  filter(Region=="Global",
+         Commodity=="Meat")%>%
+  select(Region,product=`Animal species`,system=`Production system`,protProd=`kg protein`)%>%
+  left_join(.,protInMeat)%>%
+  mutate(protProd=as.numeric(str_replace_all(protProd,",","")),
+         meatProt=replace_na(meatProt,1))%>%
+  filter(!system=="Aggregated",
+         !product == "Buffaloes")%>%
+  group_by(Region,product)%>%
+  mutate(aggProd=sum(protProd/meatProt))%>%
+  ungroup()%>%
+  mutate(propProd=protProd/aggProd,
+         scale=case_when(system %in% c("Feedlots","Industrial systems","Layers","Broilers") ~ "industrial",
+                         TRUE ~ "local"),
+         product=tolower(product),
+         product=case_when(product=="pigs" ~ "pig",
+                           product=="goats" ~ "goat",
+                           TRUE ~ product))%>%
+  select(product,system,propProd,scale)
+
+### Split intermediate into 2 since metadata says half of the feed is local, so half is compound feed (?)
+## pigs
+gfGlo[gfGlo$system=="Intermediate systems","propProd"]<-(gfGlo[gfGlo$system=="Intermediate systems","propProd"]/2)
+gfGlo[nrow(gfGlo)+1,]<-c("pig","Intermediate systems",gfGlo[gfGlo$system=="Intermediate systems","propProd"],"industrial")
+
+## cattle
+gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="cattle","propProd"]<-(gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="cattle","propProd"]/2)
+
+gfGlo[nrow(gfGlo)+1,]<-c("cattle","Mixed systems",gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="cattle","propProd"],"industrial")
+
+## Sheep
+gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="sheep","propProd"]<-(gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="sheep","propProd"]/2)
+
+gfGlo[nrow(gfGlo)+1,]<-c("sheep","Mixed systems",gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="sheep","propProd"],"industrial")
+
+# goats
+
+gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="goat","propProd"]<-(gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="goat","propProd"]/2)
+
+gfGlo[nrow(gfGlo)+1,]<-c("goat","Mixed systems",gfGlo[gfGlo$system=="Mixed systems" & gfGlo$product=="goat","propProd"],"industrial")
+
+
+livProd%>%
+  mutate(product=str_replace(Item,"Meat, ",""))%>%
+  group_by(Year,product)%>%
+  summarise(gloProd_mt=sum(Value,na.rm = T)/1000000,.groups="drop")%>%
+  ggplot()+
+  geom_col(aes(x=Year,y=gloProd_mt,fill=product))+
+  labs(y="Global meat production (mt)",title="Land-based livestock")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+```
+
+```{r }
+
+### GLEAM feed rations data
+## Pulled data for beef cattle, pork and poultry, but also have for: buffalo and small ruminants (sheep/goats)
+
+livFeeds<-read_csv("data/derived/wtdFeedProps_livestock.csv")
+
+## combine small ruminants and add to the data
+smallRum<-livFeeds%>%
+  filter(product %in% c("sheep","goat"))%>%
+  group_by(material)%>%
+  summarise(fdProp=mean(globProp))%>%
+  mutate(product="smallRuminants")%>%
+  select(product,material,globProp=fdProp)
+
+livFeeds2<-bind_rows(livFeeds%>%
+                       filter(product %in% c("cattle","pig","chicken")),
+                     smallRum)%>%
+  mutate(material=tolower(material))%>%
+  left_join(.,data.frame(product=c("cattle","pig","chicken","smallRuminants"),
+                         fcr=c(8,3.85,1.85,5)),by="product")%>% 
+  left_join(.,edible,by="product")
+
+## bring in CCI (climate change impact) from ReCiPe 2016 dataset
+
+cciDat<-read_csv("data/recipeCCIs.csv")%>%
+  filter(!duplicated(ingredient))
+
+
+### Make standard weighted feeds for top 5 products, combine sheep and goats into small rumin. --> 4 livestock feed groups
+
+livFdPrp<-livProd2%>%
+  full_join(.,livFeeds2)%>%
+  mutate(matIncl=(gloProd/ediblePortion)*fcr*globProp)%>% ## input contribution based on 'globProp' GLEAM data proportions of animal feeds
+  left_join(.,cciDat%>%
+              mutate(material=tolower(ingredient))%>%
+              select(material,cci=CCI_kg_kg))%>%
+  mutate(cciContr=cci*matIncl)
+
+protReq<-livFdPrp%>%
+  filter(Year==2018,
+         !duplicated(product))%>%
+  mutate(feedReq=case_when(product=="cattle" ~ (gloProd/0.43)*8,
+                            product=="pig" ~ (gloProd/0.72)*3.85,
+                            product=="chicken" ~ (gloProd/0.74)*1.85,
+                            TRUE ~ (gloProd/0.79)*5), # (meatProduction/ediblePortion) * FCR --> edible portion and FCR from Fry et al. 2018 correndum
+         fdProt=case_when(product=="cattle" ~ feedReq*((7+15.4)/200),
+                            product=="pig" ~ feedReq*((13+20.9)/200),
+                            product=="chicken" ~ feedReq*((18+23)/200),
+                            TRUE ~ feedReq*((10+14)/200)))%>%
+  select(product,feedReq,fdProt)
+
+protReq<-protReq[,2:4]
+
+```
+
+
+### Aquaculture
+
+```{r}
+
+### Global Aquaculture production (FAO) from 2009-2018
+# "Environment" col is fresh (1), brackish (2), marine(3)
+# "Quantity_Symbol" column rates the value all data look like they are legit
+# "Quantities are given in tonnes. The value of aquaculture, converted from local currencies, is reported in 1000 US dollars using appropriate exchange rates." - Aqua_E.html
+
+faoProd<-read_csv("data/faoData/Aquaculture_2020.1.0/TS_FI_AQUACULTURE.csv")%>%
+  left_join(.,read_csv("data/faoData/Aquaculture_2020.1.0/CL_FI_SPECIES_GROUPS.csv")%>%select(`3Alpha_Code`,Taxonomic_Code),
+            by=c("SPECIES"="3Alpha_Code"))%>%
+  left_join(.,read_csv("data/faoData/unqSppFAO_diet.csv"))%>%
+  rename(faoGrp=fao2002Grp)
+
+
+### Create protein content data
+fryTacon<-data.frame(faoGrp=unique(faoProd$faoGrp),
+                  pcFeed_low=c(30,25,20,25,NA,NA,9,18,30,9,NA,NA,30,35,18,26,30,30,17,40),
+                  pcFeed_high=c(45,45,32,45,NA,NA,22,38,45,22,NA,NA,45,45,38,32,45,45,45,47), ## eel data from Tibbets et al. 1999; flatfish (ie: sole) from Bai & Katya 2013 GAA
+                  fcr=c(1.6,1.5,1.6,1.8,NA,NA,1.6,1.6,1.6,1.6,NA,NA,1.5,1.3,1.3,1.3,1.6,1.3,1.6,1.3), # Tacon, Hasan & metian 2011 --> 2020 projections, missing values use general other value of 1.6
+                  fmIncl=c(10,8,1,8,NA,NA,2,2,8,1,NA,NA,30,12,2,2,2,12,1,12),
+                  soyIncl_low=c(8,5,20,15,NA,NA,35,20,20,35,NA,NA,8,10,2,22,20,13,5,3), #catfish data from GAA report (Engel et al.); salmon data adjusted based on Couture et al. 2019
+                  soyIncl_high=c(30,40,60,25,NA,NA,40,40,40,40,NA,NA,10,20,2,51,40,15,25,35),# FM and soy inclusion data from Tacon 2015 except where indicated
+                  percIndFd=c(90,87,95,60,NA,NA,55,75,60,50,NA,NA,98,100,75,82,60,85,60,100)) # % industrial feed from Tacon & Metian 2015: feed matters (2020 projections)
+
+### apply diets data to production data
+aqProd<-faoProd%>%
+  left_join(fryTacon)%>%
+  filter(fed==1)%>%
+  ungroup()%>%
+  mutate(prod=QUANTITY*0.86, # Fry 2016 calculates 86% of seafood is human edible
+         pcFeed_mid=(pcFeed_high+pcFeed_low)/2,
+         protReq=QUANTITY*fcr*(pcFeed_mid/100),
+         faoGrp=fct_reorder(faoGrp,QUANTITY))
+
+grpProd<-aqProd%>%
+  filter(YEAR==max(YEAR))%>%
+  group_by(faoGrp)%>%
+  summarise(totProd=sum(QUANTITY),
+            totInd=sum(prod))%>%
+  ungroup()%>%
+  mutate(faoGrp=fct_reorder(faoGrp,totProd))
+
+
+```
+
+```{r}
+
+### Fishmeal:
+# Froehlich et al. estimate limit of 30mt of forage fish for fishmeal --> 5.2:1 conversion = 5.8mt of fishmeal
+# ecologically available protein from fishmeal: 5.8 * 0.68 = 3.944 mt protein
+
+fmDem<-aqProd%>%
+  filter(YEAR==2018,
+         !is.na(fmIncl))%>%
+  mutate(fmDemand=QUANTITY*fcr*(fmIncl/100))%>%
+  group_by(faoGrp)%>%
+  summarise(totFmDem=sum(fmDemand))%>%
+  mutate(faoGrp=fct_reorder(faoGrp,totFmDem))%>%
+  ungroup()
+
+### Soy:
+## Rough estimate that there are ~20mt of soy dedicated to aquaculture feeds (The fish site (2011) https://thefishsite.com/articles/using-soy-in-aquaculture-feeds)
+## Estimates of soy inclusion by species (Engel et al. 2020)
+
+
+```
+
+
+```{r}
+
+soyDem<-aqProd%>%
+  filter(YEAR==2018,
+         !is.na(soyIncl_low))%>%
+  mutate(soyDemLo=QUANTITY*fcr*(soyIncl_low/100),
+         soyDemHi=QUANTITY*fcr*(soyIncl_high/100))%>%
+  group_by(faoGrp)%>%
+  summarise(low=sum(soyDemLo),
+            high=sum(soyDemHi))%>%
+  pivot_longer(cols=c(low,high),names_to = "bound",values_to = "soyIncl")%>%
+  mutate(faoGrp=fct_reorder(faoGrp,soyIncl))
+  # ungroup()
+
+
+### Soy:
+## Rough estimate that there are ~20mt of soy dedicated to aquaculture feeds (The fish site (2011) https://thefishsite.com/articles/using-soy-in-aquaculture-feeds)
+## Estimates of soy inclusion by species (Engel et al. 2020)
+
+
+```
+
+The calculations above use soybean meal use percentages from Tacon & Metian 2015 applied to 2018 production data to get an average of`r (round(sum(soyDem[soyDem$bound=="low","soyIncl"])/1000000,1)+round(sum(soyDem[soyDem$bound=="high","soyIncl"])/1000000,1))/2`mt of soybean meal used in aquaculture, which provides `r (round(sum(soyDem[soyDem$bound=="low","soyIncl"])/1000000,1)+round(sum(soyDem[soyDem$bound=="high","soyIncl"])/1000000,1))/2*0.46`mt of protein to the aquaculture industry. If we assume the high end of soy inclusion, between fishmeal and soy, **these calculations account for `r round((sum((soyDem[soyDem$bound=="high","soyIncl"])/1000000)*0.46+(sum(fmDem$totFmDem)/1000000)*0.68)/(sum(aqProd[aqProd$YEAR==2018,"protReq"],na.rm=T)/1000000),3)*100`% of the protein needed.**
+
+### [Troell et al. 2014](https://www.pnas.org/content/pnas/111/37/13257.full.pdf)
+
+Troell et al. list the top aquaculture feed ingredients as: soybean meal, rapeseed meal, maize, wheat. Data are old but approximate inclusion are used to fill in feeds after fishmeal inclusion has been accounted for, as above. 
+
+See figure 3 of Troell et al.: *"Fig 3. Global amount of (A) major crop feed ingredients used in aquaculture in compound feeds for fed species"*
+
+
+```{r}
+
+soyMid<-soyDem%>%
+  pivot_wider(names_from = "bound",values_from = "soyIncl")%>%
+  mutate(mid=(low+high)/2)
+totSoy<-sum(soyMid$mid)
+
+troelProps<-data.frame(input=c("soybeanMeal","rapeseedMeal","maize","wheat","wheatBran"),
+                       amtMt=c(6.5,5,4,4,3))%>%
+  mutate(propInput=amtMt/sum(amtMt),
+         relInput=totSoy*(amtMt/6.5),
+         protContr=relInput*c(0.46,0.40,0.10,0.12,0.09))
+
+cropProt<-sum(troelProps$protContr)
+
+
+```
+
+### CCI of aquaculture protein inputs
+
+Uses above estimates of fishmeal and soy inclusion applied to total production over time, multiplied by the climate change impacts for each input. 
+
+* *Based on just soy and fishmeal proportional inclusion applied to total production.*
+
+```{r}
+
+### with additional ingredients (frm Troell et al. 2014)
+
+aqIn2018<-troelProps%>%
+  select(input,relInput)%>%
+  mutate(input=str_replace(input,"soybeanMeal","soybean meal"),
+         input=tolower(str_replace(input," ","")))%>%
+  add_row(input="fishmeal",relInput=sum(fmDem$totFmDem))%>%
+  mutate(cciPer=unlist(c(cciDat[cciDat$ingredient=="Soybean meal","CCI_kg_kg"],
+                  cciDat[cciDat$ingredient=="Oilseed meals","CCI_kg_kg"],
+                  cciDat[cciDat$ingredient=="Maize","CCI_kg_kg"],
+                  cciDat[cciDat$ingredient=="Wheat","CCI_kg_kg"],
+                  cciDat[cciDat$ingredient=="Wheat","CCI_kg_kg"],
+                  cciDat[cciDat$ingredient=="Fishmeal","CCI_kg_kg"])),
+         totCCI=relInput*cciPer,
+         incl=relInput/sum(relInput))
+
+aqYrs<-aqProd%>%
+  group_by(YEAR)%>%
+  summarise(totProd=sum(QUANTITY,na.rm = T))%>%
+  crossing(.,aqIn2018)%>%
+  mutate(inputContr=totProd*1.6*incl, ## production * ave fcr * inclusion rates
+         cciContr=cciPer*inputContr)
+
+```
+ 
+## BAU to Fig2
+ 
+### Current production
+
+```{r}
+
+allDat<-aqYrs%>%
+  mutate(product="aquaculture",
+         fcr=1.6,
+         ediblePortion=0.86)%>%
+  select(Year=YEAR,
+         product,
+         gloProd=totProd,
+         material=input,
+         fcr,
+         matIncl=inputContr,
+         cci=cciPer,
+         cciContr,
+         ediblePortion)%>%
+  bind_rows(.,livFdPrp%>%select(-globProp))%>%
+  mutate(material=tolower(material))
+
+currCI<-aqYrs%>%
+  mutate(product="aquaculture")%>%
+  select(product,Year=YEAR,inputContr,totCCI=cciContr)%>%
+  bind_rows(.,livFdPrp%>%
+              group_by(product,Year,matIncl)%>%
+              summarise(totCCI=sum(cciContr))%>%
+              rename(inputContr=matIncl))
+
+
+meatProd<-aqProd%>%
+  filter(!is.na(prod))%>%
+  group_by(YEAR)%>%
+  summarise(gloProd=sum(prod))%>%
+  mutate(product="aquaculture")%>%
+  select(Year=YEAR,product,gloProd)%>%
+  bind_rows(.,livProd2)
+
+yrsProdPlt<-ggplot()+
+  geom_col(data=meatProd,aes(x=Year,y=gloProd/1000000,fill=product))+
+  labs(y="Global production (mt)",title="Total production")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+cciCurr<-ggplot(currCI)+
+  geom_col(aes(x=Year,y=totCCI/1000000,fill=product))+
+  scale_y_continuous(expand = c(0,0))+
+  labs(y="CCI (mt CO2 eq.)",title = "Impacts")+
+  theme_bw()
+
+yrsProdPlt #+ cciCurr + plot_layout(guides = "collect")
+
+```
+
+ 
+### Projections
+
+#### BAU linear model projection
+
+Calculate trend in feed use over 20 years and extend that trend line up to 2050 to estimate growth in feed demand. Ben says this will likely still be conservative since per capita demand for meat is still increasing.
+
+A study by the [World Economic Forum](http://www3.weforum.org/docs/WEF_White_Paper_Alternative_Proteins.pdf) cites an anticipated doubling of meat demand between 2010 and 2050.
+
+```{r}
+
+### meat production
+
+meatProj<-meatProd%>%
+  filter(Year>1998,Year<2019)%>%
+  group_by(Year)%>%
+  summarise(totProd=sum(gloProd))
+
+bauMtLm<-lm(totProd~Year,meatProj)
+
+lmMtProj<-data.frame(Year=2000:2050)%>%
+   mutate(meatProj=bauMtLm$coefficients[2][[1]]*Year+bauMtLm$coefficients[1][[1]],
+          meatProjMt=meatProj/1000000)
+ 
+ yrsProdPlt+
+  geom_line(data=lmMtProj,aes(Year,meatProjMt))+
+   theme_bw()
+ 
+```
+
+***
+
+### Looking forward to 2050
+
+#### BAU
+
+Business as usual is calculated using the latest year of feeds data applied to a growing population. Current meat production and feeds use are scaled to population and those rates are multiplied by the UN population projections. So growth only depends on population growth here.
+
+Adding LUC data to BAU I am calculating marginal growth per year and applying LUC emissions to just that amount and all others are using the standard GWP w/o LUC. Will take the same approach with the soy data to avoid double counting LUC impacts since the land only has to change once.
+
+
+```{r, fig.width=12}
+
+### Bringing in LUC data
+lucDat<-read_csv("data/derived/lucValsKgCo2_Kg.csv")%>%
+  mutate(luc=case_when(crop=="soybeans" ~ luc*1210/1000,
+                       TRUE ~ luc),
+         material=str_replace(crop,"soybeans","soybeanmeal"),
+         luc=luc/1000)%>%
+  select(material,luc,farming)
+
+luc<-cciDat%>%
+  mutate(material=tolower(str_replace_all(ingredient," ","")))%>%
+  select(material,cci=CCI_kg_kg)%>%
+  left_join(.,lucDat)%>%
+  mutate(luc=replace_na(luc,0))
+
+
+### MeatProd = lmSlope * (year) + lmIntercept
+
+lm2018<-bauMtLm$coefficients[2][[1]]*2018+bauMtLm$coefficients[1][[1]]
+
+## 2018 meat production rates in tonnes tonne: products
+
+prodRates<-meatProd%>%
+  filter(Year==2018)%>%
+  mutate(totProd=sum(gloProd))%>%
+  group_by(product)%>%
+  summarise(productionRate=gloProd/totProd)
+
+
+### calculate growth in production of each product from 2020-2050 based on lm total production
+
+grth2050<-lmMtProj%>%
+  filter(Year>=2019)%>%
+  mutate(cattle=meatProj*prodRates[prodRates$product=="cattle","productionRate"][[1]],
+         pig=meatProj*prodRates[prodRates$product=="pig","productionRate"][[1]],
+         chicken=meatProj*prodRates[prodRates$product=="chicken","productionRate"][[1]],
+         aquaculture=meatProj*prodRates[prodRates$product=="aquaculture","productionRate"][[1]],
+         smallRuminants=meatProj*prodRates[prodRates$product=="smallRuminants","productionRate"][[1]])%>%
+  select(-c(meatProjMt,meatProj))%>%
+  pivot_longer(-Year,names_to = "product",values_to="prod")
+
+### Bring in current data
+projMeatProd<-bind_rows(meatProd%>%
+                          filter(Year<2019)%>%
+                          rename(prod=gloProd),
+                        grth2050)
+
+### plot meat production
+projProdPlt<-ggplot(projMeatProd,aes(x=Year,y=prod/1000000,fill=product))+
+  geom_col()+
+  geom_vline(xintercept = 2020)+
+  labs(y="Global production (mt)")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+ 
+projProdPlt
+```
+
+
+```{r, fig.width=12}
+### calculate above by material
+
+## 2018 production rates in tonnes per unit of meat production: products
+
+prodRatesMat<-allDat%>%
+  filter(Year==2018)%>%
+  group_by(product,material)%>%
+  summarise(perCapUse=sum(matIncl)/lm2018,
+            perCapCci=sum(cciContr)/lm2018)%>%
+  ungroup()
+
+
+### calculate growth in material use from 2020-2050 based on lm projection
+
+grth2050mat<-lmMtProj%>%
+  filter(Year>=2019)%>%
+  select(Year,meatProj)%>%
+  crossing(.,prodRatesMat)%>%
+  mutate(projProd=meatProj*perCapUse,
+         projCCI=meatProj*perCapCci)
+
+### Bring in current data
+projMatCci<-bind_rows(allDat%>%
+                         filter(Year==2018)%>%
+                         select(Year,product,material,matIncl,cciContr),
+                       grth2050mat%>%
+                         select(Year,product,material,matIncl=projProd,cciContr=projCCI))%>%
+  mutate(material=tolower(str_replace_all(material," ","")))
+
+projMatLuc<-projMatCci%>%
+  group_by(Year,material)%>%
+  summarise(mat=sum(matIncl))%>%
+  ungroup()%>%
+  left_join(.,projMatCci%>%
+              filter(Year==2018)%>%
+              mutate(material=tolower(str_replace_all(material," ","")))%>%
+              group_by(material)%>%
+              summarise(mat2018=sum(matIncl)))%>%
+  left_join(.,luc%>%
+              filter(farming%in%c("conventionalTill",NA))%>%
+              mutate(lucCci=cci+luc)%>%
+              select(!farming),
+            by="material")%>%
+  mutate(matGrow=mat-mat2018,
+         cciGrow=matGrow*lucCci,
+         cciSame=mat2018*cci,
+         cciProj=cciSame+cciGrow)
+
+projMatLucNT<-projMatCci%>%
+  group_by(Year,material)%>%
+  summarise(mat=sum(matIncl))%>%
+  ungroup()%>%
+  left_join(.,projMatCci%>%
+              filter(Year==2018)%>%
+              mutate(material=tolower(str_replace_all(material," ","")))%>%
+              group_by(material)%>%
+              summarise(mat2018=sum(matIncl)))%>%
+  left_join(.,luc%>%
+              filter(farming%in%c("noTill",NA))%>%
+              mutate(lucCci=cci+luc)%>%
+              select(!farming),
+            by="material")%>%
+  mutate(matGrow=mat-mat2018,
+         cciGrow=matGrow*lucCci,
+         cciSame=mat2018*cci,
+         cciProj=cciSame+cciGrow)
+
+### plot material use projection
+projMatPlt<-ggplot(projMatCci,aes(x=Year,y=matIncl/1000000,fill=material))+
+  geom_col()+
+  geom_vline(xintercept = 2020)+
+  labs(y="Global material use (mt)",title = "Feed ingredients")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+
+cciProj<-ggplot(projMatLuc)+
+  geom_col(aes(x=Year,y=cciProj/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Climate Change Impacts (mt CO2)",title = "Impacts")+
+  scale_y_continuous(expand = c(0,0),limits = c(0,6000))+
+  theme_bw()
+
+cciProjNT<-ggplot(projMatLucNT)+
+  geom_col(aes(x=Year,y=cciProj/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Climate Change Impacts (mt CO2)",title = "Impacts (no till farming)")+
+  scale_y_continuous(expand = c(0,0),limits = c(0,6000))+
+  theme_bw()
+
+projMatPlt + cciProj + cciProjNT + plot_layout(guides = "collect")
+```
+
+#### Soy growth
+
+```{r}
+
+# Project protein needs
+
+prot2018<-projMatCci%>%
+  filter(Year==2018)%>%
+  left_join(.,pcIngr%>%
+              mutate(material=tolower(str_replace_all(ingredient," ","")))%>%
+              select(material,pc=`PC middle`),by="material")%>%
+  mutate(prot=matIncl*pc/100)%>%
+  summarise(totProt=sum(prot))%>%
+  select(totProt)%>%
+  as.numeric()
+
+## calculate how much additional protein will be needed to meet projected growth
+proteinProjAdd<-projMatCci%>%
+  left_join(.,pcIngr%>%
+              mutate(material=tolower(str_replace_all(ingredient," ","")))%>%
+              select(material,pc=`PC middle`),by="material")%>%
+  mutate(protYr=matIncl*pc/100)%>%
+  group_by(Year)%>%
+  summarise(totPC=sum(protYr))%>%
+  mutate(protAdd=totPC-prot2018)
+
+
+### base DF with 2018 materials thru 2050, add growth from 2020-2050
+
+baseDf<-projMatCci%>%
+  filter(Year==2018)%>%
+  select(-Year)
+
+scenProjBase<-as.data.frame(lapply(baseDf,rep,length(2018:2050)))%>%
+  mutate(Year=rep(2018:2050,each=nrow(baseDf)))
+
+soyLUCtill<-luc[luc$material=="soybeanmeal" & luc$farming=="conventionalTill","luc"][[1]]
+soyLUCnt<-luc[luc$material=="soybeanmeal" & luc$farming=="noTill","luc"][[1]]
+
+soyProjDf<-proteinProjAdd%>%
+  mutate(soyAdd=protAdd/0.46,
+         cci=soyAdd*soyLUCtill,
+         cciNT=soyAdd*soyLUCnt)%>%
+  mutate(material="soybeanmeal")%>%
+  select(Year,material,cci,cciNT)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cci=sum(cciContr))%>%
+              mutate(cciNT=cci))
+
+soyProj2<-soyProjDf%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cci),
+            totCCInt=sum(cciNT))%>%
+  mutate(scenario="soy growth")
+
+
+cciSoyPlt<-ggplot(soyProj2)+
+  geom_line(aes(x=Year,y=totCCI/1000000))+
+  #geom_vline(xintercept = 2020)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+
+```
+
+
+#### Bacteria growth
+
+```{r}
+
+bactProjDf<-proteinProjAdd%>%
+  mutate(bactAdd=protAdd/0.7,
+         cci=bactAdd*8.62)%>%
+  mutate(material="bacteria meal")%>%
+  select(Year,material,cci)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cci=sum(cciContr)))
+
+bactProj2<-bactProjDf%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cci))%>%
+  mutate(scenario="bacteria growth")
+
+
+cciBactPlt<-ggplot(bactProj2)+
+  geom_line(aes(x=Year,y=totCCI/1000000))+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+# cciBactPlt
+
+```
+
+#### Yeast growth
+
+```{r}
+
+yeastProjDf<-proteinProjAdd%>%
+  mutate(ypcAdd=protAdd/0.75,
+         ystAdd=protAdd/0.5,
+         cciYPC=ystAdd*0.58, # tallentire process modeled in gabi
+         cciYst=ystAdd*0.8)%>% # ave of a few data sources: ecoinvent, cafalec LCA, etc. 
+  mutate(material="yeast meal")%>%
+  select(Year,material,cciYPC,cciYst)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cciYPC=sum(cciContr),
+                        cciYst=sum(cciContr)))
+
+yeastProj2<-yeastProjDf%>%
+  group_by(Year)%>%
+  summarise(totCCIpc=sum(cciYPC),
+            totCCIml=sum(cciYst))%>%
+  mutate(scenario="yeast growth")
+
+
+```
+
+### Growth scenarios: CCI
+
+```{r}
+
+projScens<-projMatLuc%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cciProj))%>%
+  mutate(scenario="BAU",
+         production="conventional")%>%
+  bind_rows(projMatLucNT%>%
+              group_by(Year)%>%
+              summarise(totCCI=sum(cciProj))%>%
+              mutate(scenario="BAU",
+                     production="sustainable"))%>%
+  bind_rows(.,soyProj2%>%
+              select(Year,totCCI,scenario)%>%
+              mutate(production="conventional"),
+            soyProj2%>%
+              select(Year,totCCI=totCCInt,scenario)%>%
+              mutate(production="sustainable"),
+            bactProj2%>%
+              mutate(production="conventional"),
+            yeastProj2%>%
+              select(Year,totCCI=totCCIml,scenario)%>%
+              mutate(production="conventional"),
+            yeastProj2%>%
+              select(Year,totCCI=totCCIpc,scenario)%>%
+              mutate(production="sustainable"))
+
+scenCols<-c("grey35","darkolivegreen4","firebrick4","goldenrod3")
+names(scenCols)<-c(unique(projScens$scenario))
+
+scensPlt<-ggplot()+
+  geom_col(data=projMatCci[projMatCci$Year==2018,],aes(Year,cciContr/1000000,fill=material))+
+  geom_line(data=projScens,aes(Year,totCCI/1000000,color=scenario,linetype=production))+
+  scale_color_manual(values = scenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,5750))+
+  scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(y=expression(paste("GHG (mt", CO[2],"eq.)",sep=" ")),title="Diets of Today")+
+  theme_bw()
+
+```
+
+
+## Shifting diets
+
+### Percent contributions to meat production
+
+```{r}
+
+percDat<-meatProd%>%
+  filter(Year > 1960 & Year < 2019)%>%
+  group_by(Year,product)%>%
+  summarise(annProd=sum(gloProd))%>%
+  group_by(Year)%>%
+  mutate(totMeat=sum(annProd))%>%
+  ungroup()%>%
+  mutate(percContr=annProd/totMeat)
+
+ggplot(percDat)+
+  geom_line(aes(x=Year,y=percContr,color=product))+
+  theme_bw()
+
+```
+
+##### Meat contribution trends
+
+```{r}
+
+percCowDat<-percDat%>%
+  filter(Year>1998,product=="cattle")
+
+percCowLm<-lm(percContr~Year,percCowDat)
+
+lmCowProj<-data.frame(Year=2000:2050)%>%
+   mutate(product="cattle",
+          percContr=percCowLm$coefficients[2][[1]]*Year+percCowLm$coefficients[1][[1]])
+
+### pig
+
+percPigDat<-percDat%>%
+  filter(Year>1998,product=="pig")
+
+percPigLm<-lm(percContr~Year,percPigDat)
+
+lmPigProj<-data.frame(Year=2000:2050)%>%
+   mutate(product="pig",
+          percContr=percPigLm$coefficients[2][[1]]*Year+percPigLm$coefficients[1][[1]])
+ 
+### chicken
+
+percChknDat<-percDat%>%
+  filter(Year>1998,product=="chicken")
+
+percChknLm<-lm(percContr~Year,percChknDat)
+
+lmChknProj<-data.frame(Year=2000:2050)%>%
+   mutate(product="chicken",
+          percContr=percChknLm$coefficients[2][[1]]*Year+percChknLm$coefficients[1][[1]])
+ 
+
+### aquaculture
+
+percAquaDat<-percDat%>%
+  filter(Year>1998,product=="aquaculture")
+
+percAqLm<-lm(percContr~Year,percAquaDat)
+
+lmAqProj<-data.frame(Year=2000:2050)%>%
+   mutate(product="aquaculture",
+          percContr=percAqLm$coefficients[2][[1]]*Year+percAqLm$coefficients[1][[1]])
+ 
+### small Rums
+ 
+percSrDat<-percDat%>%
+  filter(Year>1998,product=="smallRuminants")
+
+percSrLm<-lm(percContr~Year,percSrDat)
+
+lmSrProj<-data.frame(Year=2000:2050)%>%
+   mutate(product="smallRuminants",
+          percContr=percSrLm$coefficients[2][[1]]*Year+percSrLm$coefficients[1][[1]])
+
+### Add projections to historic data
+
+percDatProj<-percDat%>%
+  select(Year,product,percContr)%>%
+  bind_rows(.,bind_rows(lmCowProj,lmPigProj,lmChknProj,lmAqProj,lmSrProj)%>%
+              filter(Year>2018))
+
+ggplot(percDatProj)+
+  geom_vline(xintercept = 2020,color="gray65")+
+  geom_line(aes(x=Year,y=percContr,color=product))+
+  theme_bw()
+
+```
+
+#### "Diets" Production projections
+
+Here I combine the projections in percent contribution to meat production with the total production projection to estimate changes in diets. Changes are incremental for each year.
+
+```{r}
+
+grth2050Diets<-lmMtProj%>%
+  filter(Year >= 2019)%>%
+  left_join(percDatProj%>%
+              filter(Year>=2019),.)%>%
+  select(-meatProjMt)%>%
+  mutate(production=percContr*meatProj)%>%
+  bind_rows(.,meatProd%>%
+              filter(Year<2019)%>%
+              rename(production=gloProd))
+
+dietProjPlt<-ggplot(grth2050Diets,aes(x=Year,y=production/1000000,fill=product))+
+  geom_col()+
+  geom_vline(xintercept = 2020)+
+  labs(y="Global production (mt)")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+ 
+dietProjPlt
+
+```
+
+```{r, fig.width=12}
+### calculate above by material
+
+livFeeds3<-livFeeds2%>%
+  bind_rows(.,aqIn2018%>%
+              mutate(product="aquaculture",
+                     fcr=1.6,
+                     ediblePortion=0.86)%>%
+              select(product,material=input,globProp=incl,fcr,ediblePortion))
+
+## 2018 production rates in tonnes per person: products
+
+prod2050Mat<-grth2050Diets%>%
+  filter(Year>2017)%>%
+  full_join(.,livFeeds3)%>%
+  mutate(matIncl=(production/ediblePortion)*fcr*globProp)
+
+### old stuff from above 
+
+prod2050MatLUC<-prod2050Mat%>%
+  mutate(material=tolower(str_replace_all(material," ","")))%>%
+  group_by(Year,material)%>%
+  summarise(mat=sum(matIncl))%>%
+  ungroup()%>%
+  left_join(.,projMatCci%>%
+              filter(Year==2018)%>%
+              mutate(material=tolower(str_replace_all(material," ","")))%>%
+              group_by(material)%>%
+              summarise(mat2018=sum(matIncl)))%>%
+  left_join(.,luc%>%
+              filter(farming %in% c("conventionalTill",NA))%>%
+              mutate(lucCci=cci+luc)%>%
+              select(!farming),
+            by="material")%>%
+  mutate(matGrow=mat-mat2018,
+         matGrow=case_when(matGrow<0.1 ~ 0, 
+                           TRUE ~ matGrow),
+         cciGrow=matGrow*lucCci,
+         cciSame=mat2018*cci,
+         cciProj=cciSame+cciGrow)
+
+
+prod2050MatLUCnt<-prod2050Mat%>%
+  group_by(Year,material)%>%
+  summarise(mat=sum(matIncl))%>%
+  mutate(material=tolower(str_replace_all(material," ","")))%>%
+  ungroup()%>%
+  left_join(.,projMatCci%>%
+              filter(Year==2018)%>%
+              mutate(material=tolower(str_replace_all(material," ","")))%>%
+              group_by(material)%>%
+              summarise(mat2018=sum(matIncl)))%>%
+  left_join(.,luc%>%
+              filter(farming %in% c("noTill",NA))%>%
+              mutate(lucCci=cci+luc)%>%
+              select(!farming),
+            by="material")%>%
+  mutate(matGrow=mat-mat2018,
+         matGrow=case_when(matGrow<0.1 ~ 0, 
+                           TRUE ~ matGrow),
+         cciGrow=matGrow*lucCci,
+         cciSame=mat2018*cci,
+         cciProj=cciSame+cciGrow)
+
+
+### plot material use projection
+dietsMat<-ggplot(prod2050Mat)+
+  geom_col(aes(Year,matIncl/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Global material use (mt)",title = "Feed ingredients")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+
+cciProjDiets<-ggplot(prod2050MatLUC)+
+  geom_col(aes(x=Year,y=cciGrow/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Climate Change Impacts (mt CO2)",title = "Impacts")+
+  scale_y_continuous(expand = c(0,0),limits = c(0,3800))+
+  theme_bw()
+
+cciProjDietsNT<-ggplot(prod2050MatLUCnt)+
+  geom_col(aes(x=Year,y=cciProj/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Climate Change Impacts (mt CO2)",title = "Impacts (no till farming)")+
+  scale_y_continuous(expand = c(0,0),limits = c(0,3800))+
+  theme_bw()
+
+dietsMat + cciProjDiets + cciProjDietsNT + plot_layout(guides = "collect")
+```
+
+#### Soy growth
+
+```{r}
+
+# Project protein needs
+## prot2018 # is the amt protein needed to feed meet produced in 2018
+
+## calculate how much additional protein will be needed to meet projected growth
+proteinProjAdd_diets<-prod2050Mat%>%
+  mutate(material=tolower(str_replace_all(material," ","")))%>%
+  left_join(.,pcIngr%>%
+              mutate(material=tolower(str_replace_all(ingredient," ","")))%>%
+              select(material,pc=`PC middle`),by="material")%>%
+  mutate(protYr=matIncl*pc/100)%>%
+  group_by(Year)%>%
+  summarise(totPC=sum(protYr))%>%
+  mutate(protAdd=totPC-prot2018)
+
+soyProjDf_D<-proteinProjAdd_diets%>%
+  mutate(soyAdd=protAdd/0.46,
+         cci=soyAdd*soyLUCtill,
+         cciNT=soyAdd*soyLUCnt)%>%
+  mutate(material="soybeanmeal")%>%
+  select(Year,material,cci,cciNT)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cci=sum(cciContr))%>%
+              mutate(cciNT=cci))
+
+### base DF with 2018 materials thru 2050, add growth from 2020-2050
+
+# baseDf<-projMatCci%>%
+#   filter(Year==2018)%>%
+#   select(-Year)
+# 
+# scenProjBase<-as.data.frame(lapply(baseDf,rep,length(2018:2050)))%>%
+#   mutate(Year=rep(2018:2050,each=nrow(baseDf)))
+
+# soyProjDf_D<-proteinProjAdd_diets%>%
+#   mutate(soyAdd=protAdd/0.46,
+#          cci=soyAdd*3.2867)%>%
+#   mutate(material="soybean meal")%>%
+#   select(Year,material,cci)%>%
+#   bind_rows(.,scenProjBase%>%
+#               group_by(Year,material)%>%
+#               summarise(cci=sum(cciContr)))
+
+soyProj_D2<-soyProjDf_D%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cci),
+            totCCInt=sum(cciNT))%>%
+  mutate(scenario="soy growth")
+
+
+cciSoyPlt_D<-ggplot(soyProj_D2)+
+  geom_line(aes(x=Year,y=totCCI/1000000))+
+  #geom_vline(xintercept = 2020)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+
+```
+
+
+#### Bacteria growth
+
+```{r}
+
+bactProjDf_D<-proteinProjAdd_diets%>%
+  mutate(bactAdd=protAdd/0.7,
+         cci=bactAdd*8.62)%>%
+  mutate(material="bacteria meal")%>%
+  select(Year,material,cci)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cci=sum(cciContr)))
+
+bactProj_D2<-bactProjDf_D%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cci))%>%
+  mutate(scenario="bacteria growth")
+
+
+cciBactPlt_D<-ggplot(bactProj_D2)+
+  geom_line(aes(x=Year,y=totCCI/1000000))+
+  #geom_vline(xintercept = 2020)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+# cciBactPlt
+
+```
+
+#### Yeast growth
+
+```{r}
+
+yeastProjDf_D<-proteinProjAdd_diets%>%
+    mutate(ypcAdd=protAdd/0.75,
+         ystAdd=protAdd/0.5,
+         cciYPC=ystAdd*0.58, # tallentire process modeled in gabi
+         cciYst=ystAdd*0.8)%>% # ave of a few data sources: ecoinvent, cafalec LCA, etc. 
+  mutate(material="yeast meal")%>%
+  select(Year,material,cciYPC,cciYst)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cciYPC=sum(cciContr),
+                        cciYst=sum(cciContr)))
+
+yeastProj_D2<-yeastProjDf_D%>%
+  group_by(Year)%>%
+  summarise(totCCIpc=sum(cciYPC),
+            totCCIml=sum(cciYst))%>%
+  mutate(scenario="yeast growth")
+
+
+cciYstPlt_D<-ggplot(yeastProj_D2)+
+  geom_line(aes(x=Year,y=totCCIml/1000000))+
+  #geom_vline(xintercept = 2020)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+# cciYstPlt
+
+```
+
+### Growth scenarios: CCI
+
+```{r}
+
+projScensD<-prod2050MatLUC%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cciProj))%>%
+  mutate(scenario="BAU",
+         production="conventional")%>%
+  bind_rows(prod2050MatLUCnt%>%
+              group_by(Year)%>%
+              summarise(totCCI=sum(cciProj))%>%
+              mutate(scenario="BAU",
+                     production="sustainable"))%>%
+  bind_rows(.,soyProj_D2%>%
+              select(Year,totCCI,scenario)%>%
+              mutate(production="conventional"),
+            soyProj_D2%>%
+              select(Year,totCCI=totCCInt,scenario)%>%
+              mutate(production="sustainable"),
+            bactProj_D2%>%
+            mutate(production="conventional"),
+            yeastProj_D2%>%
+              select(Year,totCCI=totCCIml,scenario)%>%
+              mutate(production="conventional"),
+            yeastProj_D2%>%
+              select(Year,totCCI=totCCIpc,scenario)%>%
+              mutate(production="sustainable"))
+
+scensPlt_D<-ggplot()+
+  geom_col(data=projMatCci[projMatCci$Year==2018,],aes(Year,cciContr/1000000,fill=material))+
+  geom_line(data=projScensD,aes(Year,totCCI/1000000,color=scenario,linetype=production))+
+  scale_color_manual(values = scenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,5750))+
+  scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(y="",title="Continued shifts in diets")+
+  theme_bw()
+
+```
+
+## Shifting diets 2x
+
+##### Meat contribution trends 2x
+
+```{r}
+
+cowM<-percCowLm$coefficients[2][[1]]*2
+
+cowB<-percDat[percDat$Year==2018 & percDat$product=="cattle","percContr"][[1]]-cowM*2018
+
+lmCowProj2<-data.frame(Year=2000:2050)%>%
+   mutate(product="cattle",
+          percContr=cowM*Year+cowB,
+          percContr=case_when(percContr < 0 ~ 0,
+                              TRUE ~ percContr))
+
+### pig
+
+pigM<-percPigLm$coefficients[2][[1]]*2
+
+pigB<-percDat[percDat$Year==2018 & percDat$product=="pig","percContr"][[1]]-pigM*2018
+
+lmPigProj2<-data.frame(Year=2000:2050)%>%
+   mutate(product="pig",
+          percContr=pigM*Year+pigB)
+
+
+ 
+### chicken
+
+chknM<-percChknLm$coefficients[2][[1]]*2
+
+chknB<-percDat[percDat$Year==2018 & percDat$product=="chicken","percContr"][[1]]-chknM*2018
+
+lmChknProj2<-data.frame(Year=2000:2050)%>%
+   mutate(product="chicken",
+          percContr=chknM*Year+chknB)
+ 
+
+### aquaculture
+
+aqM<-percAqLm$coefficients[2][[1]]*2
+
+aqB<-percDat[percDat$Year==2018 & percDat$product=="aquaculture","percContr"][[1]]-aqM*2018
+
+lmAqProj2<-data.frame(Year=2000:2050)%>%
+   mutate(product="aquaculture",
+          percContr=aqM*Year+aqB)
+ 
+### small Rums
+ 
+srM<-percSrLm$coefficients[2][[1]]*2
+
+srB<-percDat[percDat$Year==2018 & percDat$product=="smallRuminants","percContr"][[1]]-srM*2018
+
+lmSrProj2<-data.frame(Year=2000:2050)%>%
+   mutate(product="smallRuminants",
+          percContr=srM*Year+srB)
+
+### Add projections to historic data
+
+percDatProj2<-percDat%>%
+  select(Year,product,percContr)%>%
+  bind_rows(.,bind_rows(lmCowProj2,lmPigProj2,lmChknProj2,lmAqProj2,lmSrProj2)%>%
+              filter(Year>2018))
+
+percDatProj2[percDatProj2$Year>2046 & percDatProj2$product %in% c("aquaculture","pig","chicken","smallRuminants"),"percContr"]<-percDatProj2[percDatProj2$Year>2046 & percDatProj2$product %in% c("aquaculture","pig","chicken","smallRuminants"),"percContr"][[1]]-0.0025
+
+percDatProj2[percDatProj2$Year>2048 & percDatProj2$product %in% c("aquaculture","pig","chicken","smallRuminants"),"percContr"]<-percDatProj2[percDatProj2$Year>2048 & percDatProj2$product %in% c("aquaculture","pig","chicken","smallRuminants"),"percContr"][[1]]-0.0025
+
+ggplot(percDatProj2)+
+  geom_vline(xintercept = 2020,color="gray65")+
+  geom_line(aes(x=Year,y=percContr,color=product))+
+  theme_bw()
+
+```
+
+#### "Diets" Production projections
+
+Here I combine the projections in percent contribution to meat production with the total production projection to estimate changes in diets. Changes are incremental for each year.
+
+```{r}
+
+grth2050Diets2<-lmMtProj%>%
+  filter(Year >= 2019)%>%
+  left_join(percDatProj2%>%
+              filter(Year>=2019),.)%>%
+  select(-meatProjMt)%>%
+  mutate(production=percContr*meatProj)%>%
+  bind_rows(.,meatProd%>%
+              filter(Year<2019)%>%
+              rename(production=gloProd))
+
+dietProjPlt2<-ggplot(grth2050Diets2,aes(x=Year,y=production/1000000,fill=product))+
+  geom_col()+
+  geom_vline(xintercept = 2020)+
+  labs(y="Global production (mt)")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+ 
+dietProjPlt2
+
+```
+
+```{r, fig.width=12}
+### calculate above by material
+
+## 2018 production rates in tonnes per person: products
+
+prod2050Mat2<-grth2050Diets2%>%
+  filter(Year>2017)%>%
+  full_join(.,livFeeds3)%>%
+  mutate(matIncl=(production/ediblePortion)*fcr*globProp)
+
+### calculation GWP impacts
+
+
+prod2050MatLUC2<-prod2050Mat2%>%
+  mutate(material=tolower(str_replace_all(material," ","")))%>%
+  group_by(Year,material)%>%
+  summarise(mat=sum(matIncl))%>%
+  ungroup()%>%
+  left_join(.,projMatCci%>%
+              filter(Year==2018)%>%
+              mutate(material=tolower(str_replace_all(material," ","")))%>%
+              group_by(material)%>%
+              summarise(mat2018=sum(matIncl)))%>%
+  left_join(.,luc%>%
+              filter(farming%in%c("conventionalTill",NA))%>%
+              mutate(lucCci=cci+luc)%>%
+              select(!farming),
+            by="material")%>%
+  mutate(matGrow=mat-mat2018,
+         matGrow=case_when(matGrow<0 ~ 0, 
+                           TRUE ~ matGrow),
+         cciGrow=matGrow*lucCci,
+         cciSame=mat2018*cci,
+         cciProj=cciSame+cciGrow)
+
+
+prod2050MatLUCnt2<-prod2050Mat2%>%
+  group_by(Year,material)%>%
+  summarise(mat=sum(matIncl))%>%
+  mutate(material=tolower(str_replace_all(material," ","")))%>%
+  ungroup()%>%
+  left_join(.,projMatCci%>%
+              filter(Year==2018)%>%
+              mutate(material=tolower(str_replace_all(material," ","")))%>%
+              group_by(material)%>%
+              summarise(mat2018=sum(matIncl)))%>%
+  left_join(.,luc%>%
+              filter(farming%in%c("noTill",NA))%>%
+              mutate(lucCci=cci+luc)%>%
+              select(!farming),
+            by="material")%>%
+  mutate(matGrow=mat-mat2018,
+         matGrow=case_when(matGrow<0 ~ 0, 
+                           TRUE ~ matGrow),
+         cciGrow=matGrow*lucCci,
+         cciSame=mat2018*cci,
+         cciProj=cciSame+cciGrow)
+
+### plot material use projection
+dietsMat2<-ggplot(prod2050Mat2)+
+  geom_col(aes(Year,matIncl/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Global material use (mt)",title = "Feed ingredients")+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+
+cciProjDiets2<-ggplot(prod2050MatLUC2)+
+  geom_col(aes(x=Year,y=cciProj/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Climate Change Impacts (mt CO2)",title = "Impacts")+
+  scale_y_continuous(expand = c(0,0),limits = c(0,3800))+
+  theme_bw()
+
+cciProjDietsNt2<-ggplot(prod2050MatLUCnt2)+
+  geom_col(aes(x=Year,y=cciProj/1000000,fill=material))+
+  geom_vline(xintercept = 2020)+
+  labs(y="Climate Change Impacts (mt CO2)",title = "Impacts (no till farming)")+
+  scale_y_continuous(expand = c(0,0),limits = c(0,3800))+
+  theme_bw()
+
+dietsMat2 + cciProjDiets2 + cciProjDietsNt2 + plot_layout(guides = "collect")
+```
+
+#### Soy growth
+
+```{r}
+
+# Project protein needs
+## prot2018 # is the amt protein needed to feed meet produced in 2018
+
+## calculate how much additional protein will be needed to meet projected growth
+proteinProjAdd_diets2<-prod2050Mat2%>%
+  mutate(material=tolower(str_replace_all(material," ","")))%>%
+  left_join(.,pcIngr%>%
+              mutate(material=tolower(str_replace_all(ingredient," ","")))%>%
+              select(material,pc=`PC middle`),by="material")%>%
+  mutate(protYr=matIncl*pc/100)%>%
+  group_by(Year)%>%
+  summarise(totPC=sum(protYr))%>%
+  mutate(protAdd=totPC-prot2018)
+
+
+### base DF with 2018 materials thru 2050, add growth from 2020-2050
+
+# baseDf<-projMatCci%>%
+#   filter(Year==2018)%>%
+#   select(-Year)
+# 
+# scenProjBase<-as.data.frame(lapply(baseDf,rep,length(2018:2050)))%>%
+#   mutate(Year=rep(2018:2050,each=nrow(baseDf)))
+
+soyProjDf_D2<-proteinProjAdd_diets2%>%
+  mutate(soyAdd=protAdd/0.46,
+         cci=soyAdd*soyLUCtill,
+         cciNT=soyAdd*soyLUCnt)%>%
+  mutate(material="soybeanmeal")%>%
+  select(Year,material,cci,cciNT)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cci=sum(cciContr))%>%
+              mutate(cciNT=cci))
+
+soyProj_D22<-soyProjDf_D2%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cci),
+            totCCInt=sum(cciNT))%>%
+  mutate(scenario="soy growth")
+
+
+cciSoyPlt_D2<-ggplot(soyProj_D22)+
+  geom_line(aes(x=Year,y=totCCI/1000000))+
+  #geom_vline(xintercept = 2020)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+
+```
+
+
+#### Bacteria growth
+
+```{r}
+
+bactProjDf_D2<-proteinProjAdd_diets2%>%
+  mutate(bactAdd=protAdd/0.7,
+         cci=bactAdd*8.62)%>% #calysta data modeled in gabi
+  mutate(material="bacteria meal")%>%
+  select(Year,material,cci)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cci=sum(cciContr)))
+
+bactProj_D22<-bactProjDf_D2%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cci))%>%
+  mutate(scenario="bacteria growth")
+
+
+cciBactPlt_D2<-ggplot(bactProj_D22)+
+  geom_line(aes(x=Year,y=totCCI/1000000))+
+  #geom_vline(xintercept = 2020)+
+  scale_y_continuous(expand = c(0,0))+
+  theme_bw()
+
+# cciBactPlt
+
+```
+
+#### Yeast growth
+
+```{r}
+
+yeastProjDf_D2<-proteinProjAdd_diets2%>%
+  mutate(ypcAdd=protAdd/0.75,
+         ystAdd=protAdd/0.5,
+         cciYPC=ypcAdd*0.58, # tallentire process modeled in gabi
+         cciYst=ystAdd*0.8)%>% # ave of a few data sources: ecoinvent, cafalec LCA, etc. 
+  mutate(material="yeast meal")%>%
+  select(Year,material,cciYPC,cciYst)%>%
+  bind_rows(.,scenProjBase%>%
+              group_by(Year,material)%>%
+              summarise(cciYPC=sum(cciContr),
+                        cciYst=sum(cciContr)))
+
+yeastProj_D22<-yeastProjDf_D2%>%
+  group_by(Year)%>%
+  summarise(totCCIpc=sum(cciYPC),
+            totCCIml=sum(cciYst))%>%
+  mutate(scenario="yeast growth")
+
+
+# cciYstPlt_D2<-ggplot(yeastProj_D22)+
+#   geom_line(aes(x=Year,y=totCCI/1000000))+
+#   #geom_vline(xintercept = 2020)+
+#   scale_y_continuous(expand = c(0,0))+
+#   theme_bw()
+
+# cciYstPlt
+
+```
+
+### Growth scenarios: CCI
+
+```{r}
+
+projScens_D2<-prod2050MatLUC2%>%
+  group_by(Year)%>%
+  summarise(totCCI=sum(cciProj))%>%
+  mutate(scenario="BAU",
+         production="conventional")%>%
+  bind_rows(prod2050MatLUCnt2%>%
+              group_by(Year)%>%
+              summarise(totCCI=sum(cciProj))%>%
+              mutate(scenario="BAU",
+                     production="sustainable"))%>%
+  bind_rows(.,soyProj_D22%>%
+              select(Year,totCCI,scenario)%>%
+              mutate(production="conventional"),
+            soyProj_D22%>%
+              select(Year,totCCI=totCCInt,scenario)%>%
+              mutate(production="sustainable"),
+            bactProj_D22%>%
+              mutate(production="conventional"),
+            yeastProj_D22%>%
+              select(Year,totCCI=totCCIml,scenario)%>%
+              mutate(production="conventional"),
+            yeastProj_D22%>%
+              select(Year,totCCI=totCCIpc,scenario)%>%
+              mutate(production="sustainable"))
+
+scensPlt_D2<-ggplot()+
+  geom_col(data=projMatCci[projMatCci$Year==2018,],aes(Year,cciContr/1000000,fill=material))+
+  geom_line(data=projScens_D2,aes(Year,totCCI/1000000,color=scenario,linetype=production))+
+  scale_color_manual(values = scenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,5750))+
+  scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(y="",title="Additional shifts in diets")+
+  theme_bw()
+
+```
+
+```{r, fig.width=12}
+
+feedEmiss<-scensPlt+scensPlt_D+scensPlt_D2+plot_layout(guides="collect")
+
+```
+
+### Feeds in the bigger picture
+
+```{r}
+
+### Emissions from other production sources
+
+prodGHG<-data.frame(product=c("cattle","pig","chicken","smallRuminants","aquaculture"),
+                    ghgIntensity=c(25.51,1.48,0.56,25.845,1.55),
+                    percFeed=c(0.10,0.50,0.50,0.10,0.57))%>%
+  mutate(eos=ghgIntensity*(1-percFeed))
+
+### Business as today
+
+eosBat<-projMeatProd%>%
+  filter(Year>=2018)%>%
+  left_join(.,prodGHG,by="product")%>%
+  mutate(totalEOS=prod*eos)%>%
+  group_by(Year)%>%
+  summarise(totEOS=sum(totalEOS))
+
+prodEmiss<-projScens%>%
+  left_join(.,eosBat,by="Year")%>%
+  mutate(totGHG=totCCI+totEOS)
+
+scensPltProd<-ggplot()+
+  geom_line(data=prodEmiss,aes(Year,totGHG/1000000,color=scenario,linetype=production))+
+  scale_color_manual(values = scenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,10000))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(y=expression(paste("GHG (mt", CO[2],"eq.)",sep=" ")),title="")+
+  theme_bw()
+
+```
+
+```{r}
+
+### Shifts as usual
+
+### Emissions from other production sources
+
+eosSau<-grth2050Diets%>%
+  filter(Year>=2018)%>%
+  left_join(.,prodGHG,by="product")%>%
+  mutate(totalEOS=production*eos)%>%
+  group_by(Year)%>%
+  summarise(totEOS=sum(totalEOS))
+
+prodEmissD<-projScensD%>%
+  left_join(.,eosSau,by="Year")%>%
+  mutate(totGHG=totCCI+totEOS)
+
+scensPltProdD<-ggplot()+
+  geom_line(data=prodEmissD,aes(Year,totGHG/1000000,color=scenario,linetype=production))+
+  scale_color_manual(values = scenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,10000))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(y="",title="")+
+  theme_bw()
+
+```
+
+```{r}
+
+### Double the shifts
+
+eosS2<-grth2050Diets2%>%
+  filter(Year>=2018)%>%
+  left_join(.,prodGHG,by="product")%>%
+  mutate(totalEOS=production*eos)%>%
+  group_by(Year)%>%
+  summarise(totEOS=sum(totalEOS))
+
+prodEmissD2<-projScens_D2%>%
+  left_join(.,eosS2,by="Year")%>%
+  mutate(totGHG=totCCI+totEOS)
+
+scensPltProdD2<-ggplot()+
+  geom_line(data=prodEmissD2,aes(Year,totGHG/1000000,color=scenario,linetype=production))+
+  scale_color_manual(values = scenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,10000))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(y="",title="")+
+  theme_bw()
+
+```
+
+```{r}
+
+gloEmiss<-scensPltProd + scensPltProdD + scensPltProdD2 + plot_layout(guides="collect")
+
+feedEmiss/gloEmiss + plot_layout(guides = "collect")
+
+```
+
+## Publication figures
+
+### Figure 1: current status & trends
+
+```{r fig.width=10}
+
+prodCols<-paletteer_d("ghibli::PonyoMedium")[c(3,1,2,4,6)]
+names(prodCols)<-c("aquaculture","smallRuminants","cattle","pig","chicken")
+
+percDat$product<-factor(percDat$product,levels=c("aquaculture","chicken","pig","cattle","smallRuminants"),ordered=T)
+
+trendsMS<-ggplot(percDat[percDat$Year<2019,])+
+  geom_line(aes(x=Year,y=percContr,color=product))+
+  scale_color_manual(values = prodCols)+
+  scale_y_continuous(expand = c(0,0),breaks = seq(0,0.5,by=0.1),labels = seq(0,50,by=10))+
+  scale_x_continuous(breaks = seq(1960,2020,by=20),labels = seq(1960,2020,by=20))+
+  labs(x="",y="Percent contribution (%)\n")+
+  theme_bw()+
+  theme(legend.position = "none",
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"))
+
+meatProd$product<-factor(meatProd$product,levels=c("aquaculture","chicken","pig","cattle","smallRuminants"),ordered=T)
+
+yrsProdMS<-ggplot()+
+  geom_area(data=meatProd[meatProd$Year>1959 & meatProd$Year<2019,],aes(x=Year,y=gloProd/1000000,fill=product))+
+  labs(x="",y="Global production (mt)\n",title="")+
+  scale_y_continuous(expand = c(0,0))+
+  scale_x_continuous(breaks=seq(1960,2020,by=20),labels=seq(1960,2020,by=20))+
+  scale_fill_manual(values=prodCols)+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=14,face="bold"))
+
+yrsProdMS + trendsMS + 
+  plot_annotation(tag_levels = 'A') + 
+  plot_layout(guides = "collect")
+
+```
+
+***
+
+### Figure 2: Projected GHG emissions of feeds and livestock production
+
+```{r}
+
+fdScenCols<-c(paletteer_d("ghibli::YesterdayMedium")[c(1,5,6)],
+              paletteer_d("ghibli::MononokeMedium")[6])
+names(fdScenCols)<-c("BAU","soy growth","yeast growth","bacteria growth")
+
+peConv<-prodEmiss%>%
+  filter(production=="conventional")%>%
+  mutate(scenario=factor(scenario,
+                         levels=c("BAU", "soy growth","bacteria growth","yeast growth"),
+                         ordered = TRUE))
+
+scnPltC<-ggplot()+
+  geom_line(data=peConv,aes(Year,totCCI/1000000,color=scenario),size=0.75)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,5750))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="",title="BAT")+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+scensPltProdC<-ggplot()+
+  geom_line(data=peConv,aes(Year,totGHG/1000000,color=scenario),size=0.75)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,10000))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="",title="")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+```
+
+```{r}
+
+peDConv<-prodEmissD%>%
+  filter(production=="conventional")%>%
+  mutate(scenario=factor(scenario,
+                         levels=c("BAU", "soy growth","bacteria growth","yeast growth"),
+                         ordered = TRUE))
+
+scnDPltC<-ggplot()+
+  geom_line(data=peDConv,aes(Year,totCCI/1000000,color=scenario),size=0.75)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,5750))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="",title="BAU")+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+scensDPltProdC<-ggplot()+
+  geom_line(data=peDConv,aes(Year,totGHG/1000000,color=scenario),size=0.75)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,10000))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="\nYear",y="",title="")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=22),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+```
+
+```{r}
+
+peD2Conv<-prodEmissD2%>%
+  filter(production=="conventional")%>%
+  mutate(scenario=factor(scenario,
+                         levels=c("BAU", "soy growth","bacteria growth","yeast growth"),
+                         ordered = TRUE))
+
+scnD2PltC<-ggplot()+
+  geom_line(data=peD2Conv,aes(Year,totCCI/1000000,color=scenario),size=0.75)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,5750))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="",title="ADS")+
+  theme_bw()+
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+scensD2PltProdC<-ggplot()+
+  geom_line(data=peD2Conv,aes(Year,totGHG/1000000,color=scenario),size=0.75)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(0,10000))+ 
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="",title="")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+```
+
+```{r fig.width=12,fig.height=8}
+
+# feedEmissConv<-scnPltC + scnDPltC + scnD2PltC + plot_layout(guides="collect")
+# 
+# gloEmissConv<-scensPltProdC + scensDPltProdC + scensD2PltProdC + plot_layout(guides="collect")
+# 
+# feedEmissConv/gloEmissConv + plot_layout(guides = "collect")
+
+fig2Plts<-(scnPltC + scnDPltC + scnD2PltC)/(scensPltProdC + scensDPltProdC + scensD2PltProdC) +
+  plot_annotation(tag_levels = 'A') + 
+  plot_layout(guides="collect")
+
+y_lab <- 
+  ggplot() + 
+  annotate(geom = "text", x = 1, y = 1, label = expression(paste("GHG emissions (mt", CO[2],"eq.)",sep=" ")), size=7, angle = 90) +
+  coord_cartesian(clip = "off")+
+  theme_void()
+
+# x_lab <- 
+#   ggplot() + 
+#   annotate(geom = "text", x = 1, y = 1, label = "Year") +
+#   coord_cartesian(clip = "off")+
+#   theme_void()
+
+(y_lab|fig2Plts) + plot_layout(widths = c(0.06,1))
+
+
+# (noX/x_lab) + plot_layout(heights = c(1,0.07))
+
+```

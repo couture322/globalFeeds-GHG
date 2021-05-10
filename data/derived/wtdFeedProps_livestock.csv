@@ -1,0 +1,19 @@
+product,material,globProp
+cattle,Grains,0.5831535981818378
+cattle,Legumes and silage,0.17477318441909448
+cattle,Oilseed meals,0.07721771182160134
+chicken,Maize,0.5203391412388413
+chicken,Soybean meal,0.2157910071306216
+chicken,Wheat,0.12081754277561554
+goat,Crop residues,0.30278196505783517
+goat,Fresh grass,0.21748491891743757
+goat,Hay,0.18772770432745345
+goat,Legumes and silage,0.16722666887760815
+pig,Barley,0.08091455204746378
+pig,Maize,0.4255464011553127
+pig,Soybean meal,0.16374416712294892
+pig,Wheat,0.09647450742400736
+sheep,Crop residues,0.25913489279608376
+sheep,Fresh grass,0.28688564178392
+sheep,Hay,0.19314111716206234
+sheep,Legumes and silage,0.14897982363946624
