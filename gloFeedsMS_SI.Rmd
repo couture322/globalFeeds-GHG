@@ -1222,6 +1222,9 @@ scensPltProdD2<-ggplot()+
 ***
 ## Figure S4
 
+Projected greenhouse gas emissions of conventional verus alternative production methods for feed inputs. Alternative methods (dotted lines) refer to no till farming for crop inputs and yeast byproduct from biodiesel production from wheat. Real benefits of no-till farming vary by soil-type, location and over time, so these results are likely optimistic. 
+
+
 ```{r fig.height=9,fig.width=12}
 
 ((scensPlt+scensPlt_D+scensPlt_D2)/(scensPltProd + scensPltProdD + scensPltProdD2)) + 
@@ -1232,7 +1235,10 @@ scensPltProdD2<-ggplot()+
 
 ***
 
-### Contribution of feeds to total production emissions
+## Figure S5
+
+Contribution of feeds to total production emissions for projected years
+
 
 ```{r}
 
