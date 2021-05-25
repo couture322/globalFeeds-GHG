@@ -1,0 +1,22 @@
+input,calories (kcal/kg),ref
+Fishmeal,4402,USDA national animal nutirion program database
+soybean meal,4727,USDA national animal nutirion program database
+soybean meal,4664,USDA national animal nutirion program database
+soybean meal,5062,USDA national animal nutirion program database
+soybean meal,4976,USDA national animal nutirion program database
+oilseed meals,4798.5,USDA national animal nutirion program database
+   cottonseed meal,4494,USDA national animal nutirion program database
+   cottonseed meal,4638,USDA national animal nutirion program database
+rapeseed meal,5111,USDA national animal nutirion program database
+rapeseed meal,4716,USDA national animal nutirion program database
+Fresh grass,3463,Stergiadis et al. 2015
+Barley,4444,USDA national animal nutirion program database
+Wheat,4355,USDA national animal nutirion program database
+Hay,2066,U. Minn website: 760-1100kcal/lb
+Wheat bran,4570,USDA national animal nutirion program database
+Grains,4418.222222,"Ave of DE from USDA grains: wheat, barley, oat, rice, rye, sorghum, triticale, millete, corn"
+Maize,4544,USDA national animal nutirion program database
+Legumes and silage,4829,USDA national animal nutirion program database
+Crop residues,3294.666667,ave from USDA
+Yeast,4755.666667,Rumsey et al. 1991
+Bacteria,5493,Hellwing 2005

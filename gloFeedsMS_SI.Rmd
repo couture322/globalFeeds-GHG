@@ -3,12 +3,10 @@ title: "Feed vs food supplemental information"
 author: "Jessica Couture, Roland Geyer, Darcy Bradley, Ben Halpern, Steve Gaines"
 output:
   pdf_document: default
-  html_document:
-    fig_width: 8
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning = FALSE)
+knitr::opts_chunk$set(echo = FALSE,message = FALSE,warning = FALSE,fig.pos = '!h')
 
 library(tidyverse)
 library(kableExtra)
@@ -58,7 +56,7 @@ compsPlt
 
 ```
 
-***
+\newpage
 
 ## Table S1
 
@@ -82,15 +80,77 @@ pcTab<-pcIngr%>%
   arrange(desc(proteinContent))%>%
   select(input=material,proteinContent)
 
-kbl(pcTab)%>%
+kblS1<-kbl(pcTab)%>%
   kable_paper("striped",full_width=FALSE)%>%
-  row_spec(1:4,bold = T)
+  row_spec(1:4,bold = T)%>%
+  kable_styling(latex_options = "hold_position")
+
+```
+
+```{r}
+
+kblS1
 
 ```
 
 
-
 ***
+
+## Table S2
+
+Calorific content of feeds scenarios. "Growth" scenario feeds replace  ingredients indicated in table S1 only for growth in feeds above 2018 levels. Values are in kcal/kg of feed. 
+
+```{r}
+
+cals<-read_csv("data/calorificContent.csv")
+
+cals2<-cals%>%
+  filter(!input=="cottonseed meal")%>%
+  group_by(input)%>%
+  summarise(calories=mean(`calories (kcal/kg)`))
+
+bauCals<-allComps%>%
+  mutate(input=tolower(material))%>%
+  left_join(.,cals2%>%
+              mutate(input=tolower(input)))%>%
+  mutate(calorificContent=incl*calories)
+  
+replsCals<-bauCals%>%
+  select(-material)%>%
+  filter(input %in% c("fishmeal","soybean meal","oilseed meals","rapeseed meal"))%>%
+  left_join(.,pcTab%>%
+              mutate(input=tolower(input)))%>%
+  mutate(protIncl=incl*proteinContent/100)%>%
+  group_by(product)%>%
+  summarise(replProt=sum(protIncl))%>%
+  mutate(replSoyCal=(replProt/0.46)*cals2[cals2$input=="soybean meal","calories"][[1]],
+         replBactCal=(replProt/0.70)*cals2[cals2$input=="Bacteria","calories"][[1]],
+         replYeastCal=(replProt/0.50)*cals2[cals2$input=="Yeast","calories"][[1]])%>%
+  full_join(.,bauCals%>%
+              filter(!input %in% c("fishmeal","soybean meal","oilseed meals","rapeseed meal"))%>%
+              group_by(product)%>%
+              summarise(totCal=sum(calorificContent)))%>%
+  mutate(across(everything(), ~replace_na(.x, 0)))%>%
+  mutate(soyGrowth=replSoyCal+totCal,
+         bacteriaGrowth=replBactCal+totCal,
+         yeastGrowth=replYeastCal+totCal)%>%
+  select(product,soyGrowth,bacteriaGrowth,yeastGrowth)%>%
+  left_join(.,bauCals%>%
+              filter(!input %in% c("fishmeal","soybean meal","oilseed meals","rapeseed meal"))%>%
+              group_by(product)%>%
+              summarise(bauFeed=sum(calorificContent)))%>%
+  select(product,bauFeed,soyGrowth,bacteriaGrowth,yeastGrowth)
+
+kblS2<-kbl(replsCals)%>%
+  kable_paper("striped",full_width=FALSE)%>%
+  kable_styling(latex_options = "hold_position")
+
+kblS2
+
+```
+
+
+\newpage
 
 ## Figure S2
 
