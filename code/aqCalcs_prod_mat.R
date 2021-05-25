@@ -8,10 +8,10 @@
 # "Quantity_Symbol" column rates the value all data look like they are legit
 # "Quantities are given in tonnes. The value of aquaculture, converted from local currencies, is reported in 1000 US dollars using appropriate exchange rates." - Aqua_E.html
 
-faoProd<-read_csv("faoDat/Aquaculture_2020.1.0/TS_FI_AQUACULTURE.csv")%>%
-  left_join(.,read_csv("faoDat/Aquaculture_2020.1.0/CL_FI_SPECIES_GROUPS.csv")%>%select(`3Alpha_Code`,Taxonomic_Code),
+faoProd<-read_csv("data/faoData/Aquaculture_2020.1.0/TS_FI_AQUACULTURE.csv")%>%
+  left_join(.,read_csv("data/faoData/Aquaculture_2020.1.0/CL_FI_SPECIES_GROUPS.csv")%>%select(`3Alpha_Code`,Taxonomic_Code),
             by=c("SPECIES"="3Alpha_Code"))%>%
-  left_join(.,read_csv("faoDat/unqSppFAO_diet.csv"))%>%
+  left_join(.,read_csv("data/faoData/unqSppFAO_diet.csv"))%>%
   rename(faoGrp=fao2002Grp)
 
 

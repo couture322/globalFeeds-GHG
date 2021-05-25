@@ -38,7 +38,7 @@ allComps<-livFeeds%>%
   select(product,material, incl)%>%
   bind_rows(.,aqIn2018%>%
               mutate(product="aquaculture",
-                     material=case_when(input == "fishmeal" ~ "Fish meal",
+                     material=case_when(input == "fishmeal" ~ "Fishmeal",
                                         input == "soybeanmeal" ~ "Soybean meal",
                                         input == "rapeseedmeal" ~ "Rapeseed meal",
                                         input == "wheat"  ~ "Wheat",
@@ -50,13 +50,45 @@ allComps<-livFeeds%>%
 compsPlt<-ggplot(allComps,aes(product,incl,fill=material))+
   geom_col()+
   scale_y_continuous(expand=c(0,0))+
-  labs(y="Inclusion")+
+  labs(y="Inclusion",fill="Input")+
   theme_bw()
 
 
 compsPlt
 
 ```
+
+***
+
+## Table S1
+
+Protein content of inputs to livestock and aquaculture feeds. Bolded ingredients (those with protein content greater than 20%) are replaced in growth projection scenarios, non-bolded are kept at constant inclusion rates to 2050.
+
+```{r}
+
+pcIngr<-read_csv("data/proteinContentLivestockInputs.csv")
+
+### Protein content of 
+
+pcTab<-pcIngr%>%
+  mutate(material=case_when(ingredient=="soybeanmeal" ~ "Soybean meal",
+                         ingredient=="rapeseedmeal" ~ "Rapeseed meal",
+                         ingredient=="wheatbran" ~ "Wheat bran",
+                         TRUE ~ ingredient))%>%
+  select(material,proteinContent=`PC middle`)%>%
+  left_join(allComps%>%
+              filter(!duplicated(material))%>%
+              select(material),.)%>%
+  arrange(desc(proteinContent))%>%
+  select(input=material,proteinContent)
+
+kbl(pcTab)%>%
+  kable_paper("striped",full_width=FALSE)%>%
+  row_spec(1:4,bold = T)
+
+```
+
+
 
 ***
 
@@ -67,9 +99,8 @@ Projection of production to 2050 based on current and recent trends in growth. C
 $$Production_{year} = \beta_{1}\ (year) + \beta_{0}$$
 
 ```{r prodDat}
-livProd<-read_csv("faoDat/livestockFeeds/FAOSTAT_data_4-13-2021.csv") ## pulled data for the last 3 years: 2017,2018,2019 in case want to check out differences, start with 2019 tho --> replaced with all years of data in Aprilt
+livProd<-read_csv("data/faoData/FAOSTAT_data_4-13-2021.csv") ## pulled data for the last 3 years: 2017,2018,2019 in case want to check out differences, start with 2019 tho --> replaced with all years of data in Aprilt
 
-pcIngr<-read_csv("data/proteinContentLivestockInputs.csv")
 
 livProd2<-livProd%>%
   mutate(product=str_replace(Item,"Meat, ",""))%>%
@@ -79,7 +110,7 @@ livProd2<-livProd%>%
   group_by(Year,product)%>%
   summarise(gloProd=sum(Value,na.rm=TRUE))
 
-glmFull<-read_csv("faoDat/livestockFeeds/GLEAM_Data_public_release_tab1.csv",skip = 1, locale = locale(encoding = "latin1"))
+glmFull<-read_csv("data/faoData/GLEAM_Data_public_release_tab1.csv",skip = 1, locale = locale(encoding = "latin1"))
 protInMeat<-data.frame(product=c("cattle","chicken","pig","goat","sheep"),
                        meatProt=c(0.175,0.186,0.166,0.175,0.175)) #fry corregendum, table 1 mean of ranges, cattle used as proxy for small rum.
 
@@ -1196,6 +1227,73 @@ scensPltProdD2<-ggplot()+
 ((scensPlt+scensPlt_D+scensPlt_D2)/(scensPltProd + scensPltProdD + scensPltProdD2)) + 
   plot_annotation(tag_levels = 'A') +
   plot_layout(guides = "collect")
+
+```
+
+***
+
+### Contribution of feeds to total production emissions
+
+```{r}
+
+fdConCC<-prodEmiss%>%
+  filter(production == "conventional")%>%
+  mutate(fdContr=totCCI/totGHG)%>%
+  ggplot()+
+  geom_line(aes(Year,fdContr*100,color=scenario),size=1)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(30,80))+
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="Contribution of feeds\nto total GHG emissions (%)\n",title="Constant contribution")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+```
+
+```{r}
+
+fdConSC<-prodEmissD%>%
+  filter(production == "conventional")%>%
+  mutate(fdContr=totCCI/totGHG)%>%
+  ggplot()+
+  geom_line(aes(Year,fdContr*100,color=scenario),size=1)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(30,80))+
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="\n\nYear",y="",title="Shifting contribution")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+```
+
+```{r}
+
+fdConACS<-prodEmissD2%>%
+  filter(production == "conventional")%>%
+  mutate(fdContr=totCCI/totGHG)%>%
+  ggplot()+
+  geom_line(aes(Year,fdContr*100,color=scenario),size=1)+
+  scale_color_manual(values = fdScenCols)+
+  scale_y_continuous(expand=c(0,0),limits=c(30,80))+
+  # scale_x_continuous(breaks=c(2018,2020,2030,2040,2050),labels = c(2018,2020,2030,2040,2050))+
+  labs(x="",y="",title="Accelerated contribution shifts")+
+  theme_bw()+
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"),
+        legend.text = element_text(size=12),
+        legend.title = element_text(size=18,face="bold"))
+
+```
+
+```{r fig.width=10, fig.height=4}
+
+(fdConCC + fdConSC + fdConACS) + plot_layout(guides="collect")
 
 ```
 
