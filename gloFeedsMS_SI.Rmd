@@ -1363,3 +1363,20 @@ fdConACS<-prodEmissD2%>%
 
 ```
 
+***
+
+### Estimating carbon taxes
+
+These calculations are a rough estimate of how much of a carbon tax would be needed for yeast meals to be priced similar to soybean meals.
+
+Data:
+
+* Soybean meal prices: \$300 - \$550/tonne (World Bank)
+* Current soybean meal price: \$470/tonne (World Bank)
+  * Mean value = $440
+* Yeast meal prices:  \$300 - \$800/tonne (alibaba.com)
+  * Median value = `r (300+800)/2`
+  
+$$Price_{yeast}+ct(ghgEmissions_{yeast})=Price_{soy}+ct(ghgEmissions_{soy})$$
+
+where $ct=carbon\ tax$, solving for $ct$, a carbon tax of only $\$21.36$ would be needed for yeast and soy to cost the same amount.
